@@ -1,6 +1,7 @@
 """Claude Sonnet 4.6 client. Mock fallback so the loop runs without an API key."""
 from __future__ import annotations
 import os
+import re
 import time
 import json
 from dataclasses import dataclass
@@ -56,26 +57,36 @@ def call_claude(system: str, messages: list[dict], tools: list[dict]) -> LLMResp
     )
 
 
-def call_mock(system: str, messages: list[dict], tools: list[dict]) -> LLMResponse:
-    """Deterministic mock for offline runs. Uses the last user text to pick a tool."""
-    last_user = ""
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+
+
+def _last_user_text(messages: list[dict]) -> str:
     for m in reversed(messages):
         if m["role"] == "user":
-            content = m["content"]
-            if isinstance(content, str):
-                last_user = content
-            elif isinstance(content, list):
-                last_user = json.dumps(content)
-            break
+            c = m["content"]
+            if isinstance(c, str):
+                return c
+            if isinstance(c, list):
+                return json.dumps(c)
+    return ""
 
-    if "navigate" not in last_user.lower() and "http" in last_user.lower():
-        url = last_user.split("http", 1)[1].split()[0]
-        url = "http" + url
-        tool = {"id": "mock-1", "name": "navigate", "input": {"url": url}}
-    elif "read_page" not in last_user.lower():
+
+def call_mock(system: str, messages: list[dict], tools: list[dict]) -> LLMResponse:
+    """Deterministic mock for offline runs. Walks: navigate -> read_page -> finish."""
+    assistant_turns = sum(1 for m in messages if m["role"] == "assistant")
+
+    if assistant_turns == 0:
+        url_match = _URL_RE.search(_last_user_text(messages))
+        if url_match:
+            tool = {"id": "mock-1", "name": "navigate",
+                    "input": {"url": url_match.group(0).rstrip(".,);]")}}
+        else:
+            tool = {"id": "mock-1", "name": "read_page", "input": {}}
+    elif assistant_turns == 1:
         tool = {"id": "mock-2", "name": "read_page", "input": {}}
     else:
-        tool = {"id": "mock-3", "name": "finish", "input": {"summary": "mock-done", "answer": ""}}
+        tool = {"id": "mock-3", "name": "finish",
+                "input": {"summary": "mock-done", "answer": "mock-answer"}}
     return LLMResponse(text="[mock]", tool_use=[tool], stop_reason="tool_use",
                        input_tokens=0, output_tokens=0, latency_ms=1)
 
