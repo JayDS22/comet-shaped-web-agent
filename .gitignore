@@ -1,0 +1,9 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+scorecard.csv
+scorecard.json
+node_modules/
+.pytest_cache/
