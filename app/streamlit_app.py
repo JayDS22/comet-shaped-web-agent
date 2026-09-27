@@ -10,6 +10,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent.loop import run
+from agent.browser import BrowserUnavailable
 from tasks.specs import TASKS, get
 from tasks.fixtures.serve import ensure as ensure_fixtures
 from eval.scorer import score
@@ -47,10 +48,23 @@ with col1:
     st.code(spec.prompt, language="text")
 
     if st.button(":material/play_arrow: Run task", type="primary", use_container_width=True):
-        with st.spinner("Agent thinking..."):
-            result = run(spec.id, spec.prompt, max_steps=spec.max_steps,
-                         headless=headless, allow_ask=allow_ask)
-            sc = score(result, spec)
+        try:
+            with st.spinner("Agent thinking..."):
+                result = run(spec.id, spec.prompt, max_steps=spec.max_steps,
+                             headless=headless, allow_ask=allow_ask)
+                sc = score(result, spec)
+        except BrowserUnavailable as e:
+            st.error(
+                ":material/warning: **Chromium is not available in this environment.**\n\n"
+                f"Details: `{e}`\n\n"
+                "The classifier + probe suite still work below. For a full "
+                "task-run demo, deploy this repo via the included `Dockerfile` "
+                "(the base image `mcr.microsoft.com/playwright/python:v1.47.0-jammy` "
+                "ships Chromium) on **Fly.io, Render, or Railway**. "
+                "Streamlit Community Cloud does not ship Chromium and Playwright's "
+                "post-install step is skipped there."
+            )
+            st.stop()
 
         st.subheader(":material/scoreboard: Scorecard")
         cols = st.columns(6)

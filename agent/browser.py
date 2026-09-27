@@ -4,9 +4,19 @@ Owns the browser lifecycle. Exposes a small surface for tools.py to call.
 Enables CDP so we can subscribe to Network / Console events later.
 """
 from __future__ import annotations
+import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Optional
 from playwright.sync_api import sync_playwright, Browser, Page, CDPSession
+
+
+class BrowserUnavailable(RuntimeError):
+    """Raised when neither the Playwright-bundled Chromium nor the system
+    chromium binary can be launched. Streamlit Cloud is a common trigger:
+    the deploy image ships without Chromium and Playwright's postinstall
+    step is not run. Caller should show a friendly message and skip the
+    browser-dependent path."""
 
 
 @dataclass
@@ -19,9 +29,45 @@ class BrowserSession:
         self.browser.close()
 
 
+def _install_chromium() -> bool:
+    """Best-effort: run `playwright install chromium` in a subprocess.
+    Returns True on success. Used as a one-shot self-heal on first launch."""
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            capture_output=True, text=True, timeout=180,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def launch(headless: bool = True) -> BrowserSession:
     pw = sync_playwright().start()
-    browser = pw.chromium.launch(headless=headless)
+    try:
+        browser = pw.chromium.launch(headless=headless)
+    except Exception as first:
+        # Self-heal: try installing Chromium, then retry once.
+        if _install_chromium():
+            try:
+                browser = pw.chromium.launch(headless=headless)
+            except Exception as second:
+                pw.stop()
+                raise BrowserUnavailable(
+                    f"Chromium not available even after install attempt: {second}"
+                ) from second
+        else:
+            # Fall back to system chromium via the channel API.
+            try:
+                browser = pw.chromium.launch(headless=headless, channel="chromium")
+            except Exception as third:
+                pw.stop()
+                raise BrowserUnavailable(
+                    f"No usable Chromium. Playwright: {first}. System channel: {third}. "
+                    "For a working task-run demo, deploy via the Dockerfile "
+                    "(mcr.microsoft.com/playwright/python base has Chromium built in) "
+                    "on Fly.io / Render / Railway."
+                ) from third
     context = browser.new_context()
     page = context.new_page()
     cdp = context.new_cdp_session(page)

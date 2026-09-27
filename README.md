@@ -58,6 +58,16 @@ export ANTHROPIC_API_KEY=sk-ant-...  # optional
 streamlit run app/streamlit_app.py
 ```
 
+## Deploy
+
+**For a fully-working task-run demo, use the Dockerfile.** The base image (`mcr.microsoft.com/playwright/python:v1.47.0-jammy`) already ships Chromium so `pw.chromium.launch()` works out of the box.
+
+| Target | Task runs | Classifier + probes | Notes |
+|---|---|---|---|
+| **Fly.io / Render / Railway** (Dockerfile) | ✓ | ✓ | Recommended for the live demo |
+| **Streamlit Community Cloud** | ✗ (falls back to friendly error) | ✓ | No Chromium; the app self-heals by attempting `playwright install`, then falls back to system `chromium` via `packages.txt`; if all fail, the browser-dependent path shows a clear message and the classifier/probe UI still works |
+| **Local** (`streamlit run`) | ✓ | ✓ | After `playwright install chromium` |
+
 ## The classifier is a hint, not a boundary
 
 The `agent/classifier.py` module is a substring keyword filter. It shapes the agent's decision loop but does NOT defend against a real adversary. Documented gaps in [SECURITY.md](SECURITY.md):
