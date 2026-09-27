@@ -34,6 +34,7 @@ class RunResult:
     total_latency_ms: int = 0
     classifier_decisions: list[str] = field(default_factory=list)
     trace: list[dict] = field(default_factory=list)
+    cdp_events: list[dict] = field(default_factory=list)  # Network + Console captures
     error: Optional[str] = None
 
 
@@ -66,6 +67,12 @@ def run(task_id: str, user_prompt: str, max_steps: int = 10, headless: bool = Tr
             tool_results = []
             for tu in resp.tool_use:
                 out = dispatch(session, tu["name"], tu["input"], allow_ask=allow_ask)
+                # Drain CDP events accumulated during this tool call.
+                for ev in session.drain_events():
+                    result.cdp_events.append({
+                        "step": step, "kind": ev.kind, "method": ev.method,
+                        "summary": ev.summary, "raw": ev.raw,
+                    })
                 result.trace.append({"step": step, "tool": tu["name"], "input": tu["input"],
                                      "ok": out.get("ok"), "result": str(out.get("result"))[:200]})
                 if "classifier" in out:

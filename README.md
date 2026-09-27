@@ -1,8 +1,8 @@
 # Comet-shaped Web Agent
 
-**Playwright + Chrome DevTools Protocol + Claude Sonnet 4.6 `tool_use` on a self-hosted browser task. Payload-hint classifier (not a security boundary — see [SECURITY.md](SECURITY.md)). Six-axis eval scorecard.**
+**Playwright + Chrome DevTools Protocol + Claude Sonnet 4.6 `tool_use` on two browser tasks (self-hosted + real-web). Hardened payload classifier (16 PASS + 3 documented XFAIL probes). Six-axis eval scorecard. Three runtimes: headless Playwright, Playwright + CDP, Chrome extension (MV3).**
 
-A small, honest browser-agent harness. One task fully implemented against a local HTTP fixture (no Google, no reCAPTCHA, no bot detection). One intentionally-failing red-team probe on the classifier so the repo names its own blind spots. Room to grow — the roadmap below is what would land next.
+A small, honest browser-agent harness that names its own blind spots. Runs offline (mock LLM + local `http.server` fixture) and against a bot-friendly real-web target (`quotes.toscrape.com`). Ships a side-by-side comparison harness against [browser-use](https://github.com/browser-use/browser-use). Design decisions written up in [DESIGN.md](DESIGN.md) and a [blog post](docs/blog-post.md).
 
 ## Live demo
 
@@ -16,14 +16,16 @@ A small, honest browser-agent harness. One task fully implemented against a loca
 
 ## What it is
 
-- **1 fully-implemented task** — form-fill on a local fixture: agent navigates → reads page → fills input → submits → reads results → returns the first result URL.
-- **Payload-hint classifier** — allow / ask / deny for URLs (denies 5 banking-token hostnames, asks on checkout/download tokens) and form fields (denies password/CVV/SSN literals, asks on email/phone/address literals). **This is a keyword filter, not a security boundary.** [SECURITY.md](SECURITY.md) documents 5 attacks it does not defend against.
-- **6-axis rubric** adapted from [PrismBench](https://github.com/JayDS22/PrismBench): completion, selector robustness, latency, cost, denylist adherence, user trust. Overall = unweighted mean.
-- **6-probe classifier suite**: 5 expected-PASS + 1 expected-FAIL (homograph). The XFAIL is the point — an honest scorecard names its blind spots.
-- **Streamlit demo** — pick task, run, watch the trace, see the scorecard.
-- **CLI harness** — `python -m eval.run_eval` → `scorecard.csv` + `.json`.
-- **Mock LLM backend** — deterministic offline walker (navigate → read_page → finish) so the loop runs and the harness is exercised without an Anthropic key.
-- **Self-hosted HTTP fixture** — stdlib `http.server` on `127.0.0.1:5555` starts automatically. Zero external dependencies for the browser target.
+- **2 fully-implemented tasks**:
+  - `T1_form_fill` — self-hosted fixture: navigate → read → fill → submit → extract
+  - `T2_pagination_extract` — real-web (`quotes.toscrape.com`): walk pages 1-2, extract authors
+- **Hardened payload classifier** — `agent/classifier.py` applies **Unicode NFKC normalization + IDNA canonicalization + confusables mapping** to URLs, alphanumeric collapse to field names, and a regex screen for prompt-injection payloads in `read_page` output. Not a security boundary (see [SECURITY.md](SECURITY.md)) but not a naive substring match either.
+- **6-axis rubric** adapted from [PrismBench](https://github.com/JayDS22/PrismBench): completion, selector robustness, latency, cost, **denylist adherence** (not "safety" — see [DESIGN.md](DESIGN.md)#1), user trust.
+- **19-probe classifier suite**: 16 expected-PASS covering homograph URLs (capital-I / Cyrillic / full-width), renamed fields (camelCase / hyphen / abbreviation), prompt-injection patterns. 3 XFAIL documenting residual gaps (redirect chains, novel phishing, semantic PII).
+- **Real CDP subscriptions** — `Network.responseReceived`, `Runtime.consoleAPICalled`, `Runtime.exceptionThrown` handlers buffer into every `RunResult.cdp_events`. Traces show network + console + JS-exception activity alongside tool calls.
+- **Comparison scaffold** — `eval/compare.py` runs the same task on this harness and on [browser-use](https://github.com/browser-use/browser-use), emits `comparison.csv`.
+- **Chrome extension (MV3)** — `extension/` ships the same 5-tool surface as a `content_script` + service worker, with the Anthropic call routed through the worker. Third runtime evidence.
+- **Streamlit demo** + **CLI harness** + **mock LLM backend** + **self-hosted HTTP fixture** (`127.0.0.1:5555`).
 
 ## Architecture
 

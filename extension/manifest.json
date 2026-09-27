@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Comet-shaped Web Agent (dev)",
+  "version": "0.1.0",
+  "description": "In-page runtime for the comet-shaped-web-agent harness. Same tool surface as the Playwright + CDP runtime, executed from a Chrome content_script + service worker instead. Third-runtime evidence for browser-agent portability.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Comet-shaped Web Agent"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content_script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

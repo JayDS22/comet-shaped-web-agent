@@ -1,37 +1,53 @@
 """Playwright + Chrome DevTools Protocol session wrapper.
 
-Owns the browser lifecycle. Exposes a small surface for tools.py to call.
-Enables CDP so we can subscribe to Network / Console events later.
+Owns the browser lifecycle. Subscribes to CDP events (Network.responseReceived,
+Runtime.consoleAPICalled) and buffers them so the eval trace can surface real
+browser telemetry, not just LLM tool calls.
 """
 from __future__ import annotations
 import subprocess
 import sys
-from dataclasses import dataclass
-from typing import Optional
-from playwright.sync_api import sync_playwright, Browser, Page, CDPSession
+from dataclasses import dataclass, field
+from typing import Callable, Optional
+from playwright.sync_api import sync_playwright, Browser, Page, CDPSession, Playwright
 
 
 class BrowserUnavailable(RuntimeError):
     """Raised when neither the Playwright-bundled Chromium nor the system
-    chromium binary can be launched. Streamlit Cloud is a common trigger:
-    the deploy image ships without Chromium and Playwright's postinstall
-    step is not run. Caller should show a friendly message and skip the
-    browser-dependent path."""
+    chromium binary can be launched. Streamlit Cloud is a common trigger."""
+
+
+@dataclass
+class CDPEvent:
+    kind: str          # "network" | "console"
+    method: str        # CDP event method name
+    summary: str       # short human-readable line
+    raw: dict          # trimmed payload
 
 
 @dataclass
 class BrowserSession:
+    pw: Playwright
     browser: Browser
     page: Page
     cdp: CDPSession
+    events: list[CDPEvent] = field(default_factory=list)
 
     def close(self):
-        self.browser.close()
+        try:
+            self.browser.close()
+        finally:
+            self.pw.stop()
+
+    def drain_events(self) -> list[CDPEvent]:
+        """Return + clear the buffered CDP events."""
+        drained = list(self.events)
+        self.events.clear()
+        return drained
 
 
 def _install_chromium() -> bool:
-    """Best-effort: run `playwright install chromium` in a subprocess.
-    Returns True on success. Used as a one-shot self-heal on first launch."""
+    """Best-effort: run `playwright install chromium` in a subprocess."""
     try:
         r = subprocess.run(
             [sys.executable, "-m", "playwright", "install", "chromium"],
@@ -42,12 +58,57 @@ def _install_chromium() -> bool:
         return False
 
 
+def _attach_cdp_listeners(cdp: CDPSession, buffer: list[CDPEvent]) -> None:
+    """Subscribe to Network + Console + Runtime events. Buffer trimmed payloads."""
+
+    def on_response(params: dict):
+        resp = params.get("response", {}) or {}
+        status = resp.get("status")
+        url = resp.get("url", "")
+        mime = resp.get("mimeType", "")
+        buffer.append(CDPEvent(
+            kind="network",
+            method="Network.responseReceived",
+            summary=f"{status} {mime}  {url[:100]}",
+            raw={"status": status, "url": url, "mime": mime,
+                 "remoteIPAddress": resp.get("remoteIPAddress")},
+        ))
+
+    def on_console(params: dict):
+        msg_type = params.get("type", "log")
+        args = params.get("args", []) or []
+        text_parts = []
+        for a in args[:3]:
+            v = a.get("value")
+            if v is not None:
+                text_parts.append(str(v)[:80])
+        text = " ".join(text_parts)
+        buffer.append(CDPEvent(
+            kind="console",
+            method="Runtime.consoleAPICalled",
+            summary=f"[{msg_type}] {text[:120]}",
+            raw={"type": msg_type, "text": text},
+        ))
+
+    def on_exception(params: dict):
+        exc = params.get("exceptionDetails", {}) or {}
+        buffer.append(CDPEvent(
+            kind="console",
+            method="Runtime.exceptionThrown",
+            summary=f"[exception] {exc.get('text', 'unknown')[:120]}",
+            raw={"text": exc.get("text"), "line": exc.get("lineNumber")},
+        ))
+
+    cdp.on("Network.responseReceived", on_response)
+    cdp.on("Runtime.consoleAPICalled", on_console)
+    cdp.on("Runtime.exceptionThrown", on_exception)
+
+
 def launch(headless: bool = True) -> BrowserSession:
     pw = sync_playwright().start()
     try:
         browser = pw.chromium.launch(headless=headless)
     except Exception as first:
-        # Self-heal: try installing Chromium, then retry once.
         if _install_chromium():
             try:
                 browser = pw.chromium.launch(headless=headless)
@@ -57,7 +118,6 @@ def launch(headless: bool = True) -> BrowserSession:
                     f"Chromium not available even after install attempt: {second}"
                 ) from second
         else:
-            # Fall back to system chromium via the channel API.
             try:
                 browser = pw.chromium.launch(headless=headless, channel="chromium")
             except Exception as third:
@@ -68,12 +128,17 @@ def launch(headless: bool = True) -> BrowserSession:
                     "(mcr.microsoft.com/playwright/python base has Chromium built in) "
                     "on Fly.io / Render / Railway."
                 ) from third
+
     context = browser.new_context()
     page = context.new_page()
     cdp = context.new_cdp_session(page)
     cdp.send("Network.enable")
     cdp.send("Runtime.enable")
-    return BrowserSession(browser=browser, page=page, cdp=cdp)
+
+    events: list[CDPEvent] = []
+    _attach_cdp_listeners(cdp, events)
+
+    return BrowserSession(pw=pw, browser=browser, page=page, cdp=cdp, events=events)
 
 
 def dom_snapshot(page: Page, max_chars: int = 8000) -> str:
@@ -86,10 +151,7 @@ def dom_snapshot(page: Page, max_chars: int = 8000) -> str:
 
 
 def clickable_map(page: Page, limit: int = 30) -> list[dict]:
-    """Return a small structured list of clickable elements (buttons, links, inputs).
-
-    Small and structured beats a full DOM dump — model plans faster on a menu.
-    """
+    """Return a small structured list of clickable elements."""
     js = """
     () => {
       const nodes = [...document.querySelectorAll('a, button, input, [role=button]')];

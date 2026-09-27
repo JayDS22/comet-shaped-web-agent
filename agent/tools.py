@@ -6,7 +6,7 @@ Every tool returns a small structured dict the model can act on.
 from __future__ import annotations
 from typing import Any
 from agent.browser import BrowserSession, dom_snapshot, clickable_map
-from agent.classifier import classify_url, classify_field, Decision
+from agent.classifier import classify_url, classify_field, scan_observation, Decision
 
 
 TOOL_SCHEMAS = [
@@ -73,13 +73,23 @@ def dispatch(session: BrowserSession, name: str, args: dict, allow_ask: bool) ->
         return {"ok": True, "result": f"loaded {url}", "classifier": v.decision.value}
 
     if name == "read_page":
+        snapshot = dom_snapshot(session.page)
+        injection = scan_observation(snapshot)
+        # Redact injection payloads before they reach the model. Do not fail
+        # the tool call — the reader still needs to see the page, just not
+        # the payload steering it.
+        if injection.decision == Decision.DENY:
+            snapshot = f"[REDACTED: {injection.reason}]\n" + \
+                       "".join(c if c.isalnum() or c.isspace() else " " for c in snapshot)[:2000]
         return {
             "ok": True,
             "result": {
-                "text": dom_snapshot(session.page),
+                "text": snapshot,
                 "clickable": clickable_map(session.page),
                 "url": session.page.url,
+                "observation_classifier": injection.decision.value,
             },
+            "classifier": injection.decision.value,
         }
 
     if name == "click":
