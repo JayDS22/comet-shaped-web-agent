@@ -4,6 +4,16 @@
 
 A small, honest browser-agent harness. One task fully implemented against a local HTTP fixture (no Google, no reCAPTCHA, no bot detection). One intentionally-failing red-team probe on the classifier so the repo names its own blind spots. Room to grow — the roadmap below is what would land next.
 
+## Live demo
+
+![Scorecard after running T1_form_fill end-to-end: Overall 0.933](docs/screenshots/01-scorecard.png)
+
+*T1_form_fill on the self-hosted fixture: 5-step trace (navigate → read_page → fill → click → read_page), Claude Sonnet 4.6 tool_use, Overall 0.933.*
+
+![Classifier probe suite: 5 expected-PASS + 1 XFAIL homograph](docs/screenshots/02-probes.png)
+
+*Classifier probe suite. The `homograph_wells_XFAIL` result is intentional — an honest scorecard names its own blind spots. See [SECURITY.md](SECURITY.md).*
+
 ## What it is
 
 - **1 fully-implemented task** — form-fill on a local fixture: agent navigates → reads page → fills input → submits → reads results → returns the first result URL.
